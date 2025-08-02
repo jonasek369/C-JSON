@@ -1,0 +1,13 @@
+{
+  "name": "Alice",
+  "age": 30,
+  "float": 0.3225235,
+  "languages": ["C", "Python", "Rust"],
+  "is_working": true,
+  "unknown": null,
+  "floor_level": false,
+  "sum": {"test": "working..."},
+  "empty": "",
+  "big_number": 1e10,
+  "nested_array": [[1, 2], [3, 4]]
+}
