@@ -8,7 +8,7 @@
 #include <math.h>
 
 #define STB_DS_IMPLEMENTATION
-#define STBDS_STRING_KEY
+// #define STBDS_STRING_KEY
 #include "stb_ds.h"
 
 #define ARENA_IMPLEMENTATION
@@ -34,43 +34,40 @@ char* file_read(const char* file_name) {
     }
 
     fseek(fp, 0, SEEK_END);
-    long file_size = ftell(fp);
-    rewind(fp);
-
-    if (file_size < 0) {
+    long file_size_code = ftell(fp);
+    if(file_size_code < 0){
         fprintf(stderr, "Could not determine file size\n");
         fclose(fp);
         return NULL;
     }
+    size_t file_size = (size_t)file_size_code;
+    rewind(fp);
 
     char* content = NULL;
     arrsetcap(content, file_size + 1);
-
-    arrsetlen(content, file_size); // sets logical size
-    size_t read_count = fread(content, 1, file_size, fp);
+    
+    size_t read_count = fread(arraddnptr(content, file_size), 1, file_size, fp);
     fclose(fp);
-
+    
     if (read_count != file_size) {
         fprintf(stderr, "Could not read entire file\n");
         arrfree(content);
         return NULL;
     }
-
-    arrput(content, '\0');
-
+    
+    arrput(content, '\0'); // appends NUL terminator
     return content;
 }
 
 typedef enum {
-    TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE,
+    TOKEN_EOF=0, TOKEN_ERROR, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE,
     TOKEN_LEFT_BRACKET, TOKEN_RIGHT_BRACKET,
     TOKEN_COMMA, TOKEN_COLON,
     TOKEN_STRING, TOKEN_NUMBER,
-    TOKEN_TRUE, TOKEN_FALSE, TOKEN_NULL,
-    TOKEN_EOF, TOKEN_ERROR
-} TokenType;
+    TOKEN_TRUE, TOKEN_FALSE, TOKEN_NULL, TOKEN_NOT_INIT
+} JsonTokenType;
 
-const char* token_type_to_string(TokenType type) {
+const char* token_type_to_string(JsonTokenType type) {
     switch (type) {
         case TOKEN_LEFT_BRACE: return "TOKEN_LEFT_BRACE";
         case TOKEN_RIGHT_BRACE: return "TOKEN_RIGHT_BRACE";
@@ -85,28 +82,36 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_NULL: return "TOKEN_NULL";
         case TOKEN_EOF: return "TOKEN_EOF";
         case TOKEN_ERROR: return "TOKEN_ERROR";
+        case TOKEN_NOT_INIT: return "TOKEN_NOT_INIT";
         default: return "UNKNOWN_TOKEN";
     }
 }
 
 
 typedef struct {
-    TokenType type;
+    JsonTokenType type;
     const char *start;
     size_t length;
 } Token;
 
-
+static int utf8_char_len(uint8_t c) {
+    if (c < 0x80) return 1;              // ASCII
+    else if ((c & 0xE0) == 0xC0) return 2; // 110xxxxx
+    else if ((c & 0xF0) == 0xE0) return 3; // 1110xxxx
+    else if ((c & 0xF8) == 0xF0) return 4; // 11110xxx
+    else return 1;
+}
 
 
 void parse_string(char* json, size_t* index, Token* tok) {
-    size_t start = ++(*index);  // skip opening quote
+    size_t start = ++(*index);
 
     while (json[*index] != '"' && json[*index] != '\0') {
         if (json[*index] == '\\' && json[*index + 1] != '\0') {
-            (*index) += 2;  // skip escaped character
+            (*index) += 2;
         } else {
-            (*index)++;
+            int step = utf8_char_len((uint8_t)json[*index]);
+            (*index) += step;
         }
     }
 
@@ -115,11 +120,12 @@ void parse_string(char* json, size_t* index, Token* tok) {
     tok->type = TOKEN_STRING;
 
     if (json[*index] == '"') {
-        (*index)++;  // skip closing quote
+        (*index)++;
     } else {
-        tok->type = TOKEN_ERROR;  // Unterminated string
+        tok->type = TOKEN_ERROR;
     }
 }
+
 
 void parse_number(char* json, size_t* index, Token* tok) {
     size_t start = *index;
@@ -189,18 +195,22 @@ void parse_number(char* json, size_t* index, Token* tok) {
     }
 }
 
+static int is_json_delim(char c) {
+    return c == '\0' || c == ',' || c == ']' || c == '}' || isspace((uint8_t)c);
+}
+
 void parse_keyword(char* json, size_t* index, Token* tok) {
     char* ptr = &json[*index];
 
-    if (strncmp(ptr, "true", 4) == 0) {
+    if (strncmp(ptr, "true", 4) == 0 && is_json_delim(ptr[4])) {
         tok->type = TOKEN_TRUE;
         tok->length = 4;
         (*index) += 4;
-    } else if (strncmp(ptr, "false", 5) == 0) {
+    } else if (strncmp(ptr, "false", 5) == 0 && is_json_delim(ptr[5])) {
         tok->type = TOKEN_FALSE;
         tok->length = 5;
         (*index) += 5;
-    } else if (strncmp(ptr, "null", 4) == 0) {
+    } else if (strncmp(ptr, "null", 4) == 0 && is_json_delim(ptr[4])) {
         tok->type = TOKEN_NULL;
         tok->length = 4;
         (*index) += 4;
@@ -211,15 +221,16 @@ void parse_keyword(char* json, size_t* index, Token* tok) {
     }
 }
 
+
 Token next_token(char* json, size_t* index) {
-    while (is_whitespace[(unsigned char)json[*index]]) {
+    while (is_whitespace[(uint8_t)json[*index]]) {
         (*index)++;
     }
-
 
     char c = json[*index];
 
     Token tok;
+    tok.type = TOKEN_NOT_INIT;
     tok.start = &json[*index];
     tok.length = 1;
 
@@ -229,12 +240,12 @@ Token next_token(char* json, size_t* index) {
     }
 
     switch (c) {
-        case '{': tok.type = TOKEN_LEFT_BRACE; (*index)++; break;
-        case '}': tok.type = TOKEN_RIGHT_BRACE; (*index)++; break;
-        case '[': tok.type = TOKEN_LEFT_BRACKET; (*index)++; break;
+        case '{': tok.type = TOKEN_LEFT_BRACE;    (*index)++; break;
+        case '}': tok.type = TOKEN_RIGHT_BRACE;   (*index)++; break;
+        case '[': tok.type = TOKEN_LEFT_BRACKET;  (*index)++; break;
         case ']': tok.type = TOKEN_RIGHT_BRACKET; (*index)++; break;
-        case ':': tok.type = TOKEN_COLON; (*index)++; break;
-        case ',': tok.type = TOKEN_COMMA; (*index)++; break;
+        case ':': tok.type = TOKEN_COLON;         (*index)++; break;
+        case ',': tok.type = TOKEN_COMMA;         (*index)++; break;
         case '"': {
             parse_string(json, index, &tok);
             return tok;
@@ -247,7 +258,7 @@ Token next_token(char* json, size_t* index) {
         }
         case '\0':
             tok.type = TOKEN_EOF;
-            tok.length = 0;
+            tok.length = 1;
             return tok;
         default:
             tok.type = TOKEN_ERROR;
@@ -261,9 +272,16 @@ Token next_token(char* json, size_t* index) {
 Token* tokenize(char* file_content){
     Token* tokens = NULL;
     size_t index = 0;
+
     while (true) {
         Token tok = next_token(file_content, &index);
-        if (tok.type == TOKEN_EOF || tok.type == TOKEN_ERROR) {
+        if (tok.type == TOKEN_ERROR) {
+            printf("Hit error at token %li. At file_content index %li\n",
+                   (long int)arrlenu(tokens), (long int)index);
+            break;
+        }
+        if (tok.type == TOKEN_EOF) {
+            arrput(tokens, tok);
             break;
         }
         arrput(tokens, tok);
@@ -282,7 +300,7 @@ struct JsonValue {
     union {
         double number;
         char *string;
-        int boolean;
+        bool boolean;
         JsonValue** array;  // list of JsonValue
         JsonPair* object;   // sh of JsonPair
     };
@@ -305,7 +323,9 @@ typedef struct {
 
 
 void advance(Parser* parser) {
-    parser->index++;
+    if (parser->tokens[parser->index].type != TOKEN_EOF) {
+        parser->index++;
+    }
 }
 
 void parse_object(Parser* parser, JsonValue* json_object, Arena* arena);
@@ -324,10 +344,9 @@ JsonValue parse_value(Parser* parser, Arena* arena){
             break;
         case TOKEN_NUMBER:
             value.type = JSON_NUMBER;
-            {
-                char* number_string = arena_strndup(arena, token.start, token.length);
-                value.number = atof(number_string);
-            }
+
+            char* number_string = arena_strndup(arena, token.start, token.length);
+            value.number = atof(number_string);
             advance(parser);
             break;
         case TOKEN_TRUE:
@@ -351,13 +370,20 @@ JsonValue parse_value(Parser* parser, Arena* arena){
             parse_array(parser, &value, arena);
             break;
         default:
-            printf("Unexpected token: %.*s\n", (int)token.length, token.start);
+
+            printf("Unexpected token: %.*s type=%u\n", (int)token.length, token.start, token.type);
             exit(1);
     }
     return value;
 }
 
 Token get_current_token(Parser* parser) {
+    size_t len = arrlenu(parser->tokens);
+    if (parser->index >= len) {
+        printf("Parser index %lu out of bounds (len=%lu)\n", (long int)parser->index, (long int)len);
+        Token t = { .type = TOKEN_EOF, .start = NULL, .length = 0 };
+        return t;
+    }
     return parser->tokens[parser->index];
 }
 
@@ -371,7 +397,7 @@ void parse_object(Parser* parser, JsonValue* json_object, Arena* arena) {
         Token key_token = get_current_token(parser);
 
         if (key_token.type != TOKEN_STRING) {
-            printf("Expected string key but %s found. at %i\n", token_type_to_string(key_token.type), parser->index);
+            printf("Expected string key but %s found. at %lu\n", token_type_to_string(key_token.type), (long int)parser->index);
             exit(1);
         }
 
@@ -426,55 +452,55 @@ void parse_array(Parser* parser, JsonValue* json_object, Arena* arena) {
     advance(parser); // Skip ']'
 }
 
-JsonValue parse_json(Token* tokens, Arena* arena){
+void parse_json(Token* tokens, Arena* arena, JsonValue* output) {
     Parser parser = { tokens, 0 };
-    JsonValue json_object;
-    if(tokens[0].type == TOKEN_LEFT_BRACE){
-        parse_object(&parser, &json_object, arena);
-    } else if(tokens[0].type == TOKEN_LEFT_BRACKET){
-        parse_array(&parser, &json_object, arena);
+
+    if (tokens[0].type == TOKEN_LEFT_BRACE) {
+        parse_object(&parser, output, arena);
+    } else if (tokens[0].type == TOKEN_LEFT_BRACKET) {
+        parse_array(&parser, output, arena);
     } else {
-        printf("error\n");
+        printf("error: root must be object or array\n");
         exit(1);
     }
 
-    return json_object;
+    // After parsing, we should be at EOF
+    if (get_current_token(&parser).type != TOKEN_EOF) {
+        printf("warning: extra tokens after root JSON value at index %lu\n", (long int)parser.index);
+    }
 }
 
 
 
-char* get_indentation(int depth, int spaces) {
+static void get_indentation(int depth, int spaces, char *buffer, size_t bufsize) {
     if (depth < 0) depth = 0;
 
-    int spacesPerDepth = spaces;
-    int totalSpaces = depth * spacesPerDepth;
-
-    char* result = (char*)malloc(totalSpaces + 1);
-    if (!result) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
+    int totalSpaces = depth * spaces;
+    if ((size_t)totalSpaces >= bufsize) {
+        totalSpaces = (int)bufsize - 1; // prevent overflow
     }
 
-    memset(result, ' ', totalSpaces);
-    result[totalSpaces] = '\0';
-
-    return result;
+    memset(buffer, ' ', totalSpaces);
+    buffer[totalSpaces] = '\0';
 }
 
-void json_print(JsonValue* json, size_t spaces, size_t depth){
-    switch(json->type){
+void json_print(JsonValue* json, size_t spaces, size_t depth) {
+    char indent[512]; // max indentation size — adjust as needed
+
+    switch (json->type) {
         case JSON_OBJECT: {
             printf("{\n");
             depth++;
 
             JsonPair *pairs = json->object; // hashmap of pairs
-            size_t count = hmlen(pairs);
+            size_t count = hmlenu(pairs);
 
             size_t i = 0;
-            for (size_t slot = 0; slot < hmlen(pairs); slot++) {
+            for (size_t slot = 0; slot < hmlenu(pairs); slot++) {
                 if (pairs[slot].key == NULL) continue;
 
-                printf("%s\"%s\": ", get_indentation(depth, spaces), pairs[slot].key);
+                get_indentation(depth, spaces, indent, sizeof(indent));
+                printf("%s\"%s\": ", indent, pairs[slot].key);
                 json_print(pairs[slot].value, spaces, depth);
                 if (i < count - 1) printf(",");
                 printf("\n");
@@ -482,7 +508,8 @@ void json_print(JsonValue* json, size_t spaces, size_t depth){
             }
 
             depth--;
-            printf("%s}", get_indentation(depth, spaces));
+            get_indentation(depth, spaces, indent, sizeof(indent));
+            printf("%s}", indent);
             break;
         }
         case JSON_ARRAY: {
@@ -492,17 +519,19 @@ void json_print(JsonValue* json, size_t spaces, size_t depth){
             JsonValue** values = json->array; // dynamic array
             size_t count = arrlen(values);
 
-            for(size_t i = 0; i < count; i++){
-                printf("%s", get_indentation(depth, spaces));
+            for (size_t i = 0; i < count; i++) {
+                get_indentation(depth, spaces, indent, sizeof(indent));
+                printf("%s", indent);
                 json_print(values[i], spaces, depth);
-                if(i < count - 1){
+                if (i < count - 1) {
                     printf(",");
                 }
                 printf("\n");
             }
 
             depth--;
-            printf("%s]", get_indentation(depth, spaces));
+            get_indentation(depth, spaces, indent, sizeof(indent));
+            printf("%s]", indent);
             break;
         }
         case JSON_STRING: {
@@ -510,11 +539,7 @@ void json_print(JsonValue* json, size_t spaces, size_t depth){
             break;
         }
         case JSON_NUMBER: {
-            if (fabs(json->number - (long long int)json->number) < 1e-9) {
-                printf("%lld", (long long int)json->number);
-            } else {
-                printf("%f", json->number);
-            }
+            printf("%g", json->number);
             break;
         }
         case JSON_BOOL: {
@@ -526,38 +551,184 @@ void json_print(JsonValue* json, size_t spaces, size_t depth){
             break;
         }
     }
-}
-
-JsonValue* json_get(JsonValue* json, const char* path[], size_t count){
-    JsonValue* current = json;
-    for(size_t i = 0; i< count; i++){
-        if(current->type != JSON_OBJECT){
-            printf("Trying to access value as object! at \"%s\"\n", path[i]);
-            return NULL;
-        }
-        JsonValue* found = shget(current->object, path[i]);
-        if(!found){
-            printf("Key \"%s\" dose not exist in the json!\n", path[i]);
-            return NULL;
-        }else{
-            current = found;
-        }
+    if(depth == 0){
+        printf("\n");
     }
-    return current;
 }
 
-JsonValue jsonFileLoad(const char* file_name, Arena* arena){
+void json_free(JsonValue *value) {
+    if (!value) return;
+
+    switch (value->type) {
+        case JSON_ARRAY:
+            if (value->array) {
+                for (size_t i = 0; i < arrlenu(value->array); i++) {
+                    json_free(value->array[i]);
+                }
+                arrfree(value->array);
+            }
+            break;
+
+        case JSON_OBJECT: {
+            for(size_t i = 0; i < shlenu(value->object); i++){
+                json_free(value->object[i].value);
+            }
+            shfree(value->object);
+            break;
+        }
+
+        case JSON_STRING:
+        case JSON_NUMBER:
+        case JSON_BOOL:
+            // Strings are arena allocated (number and bool arent on heap)
+            break;
+
+        default:
+            break;
+    }
+}
+
+void jsonFileLoad(const char* file_name, Arena* arena, JsonValue* output){
     char* file_content = file_read(file_name);
+    if(!file_content){
+        return;
+    }
     Token* tokens = tokenize(file_content);
-    JsonValue json = parse_json(tokens, arena);
+    parse_json(tokens, arena, output);
     arrfree(file_content);
     arrfree(tokens);
-    return json;
 }
 
-JsonValue jsonStringLoad(char* file_content, Arena* arena){
-    Token* tokens = tokenize(file_content);
-    JsonValue json = parse_json(tokens, arena);
+void jsonStringLoad(char* json_string, Arena* arena, JsonValue* output){
+    Token* tokens = tokenize(json_string);
+    parse_json(tokens, arena, output);
     arrfree(tokens);
-    return json;
+}
+
+void json_init_object(JsonValue* json){
+    json->type = JSON_OBJECT;
+}
+
+void json_add_child(JsonValue* json, char* key, JsonValue* child){
+    if(!child){
+        fprintf(stderr, "Tryng to add child that NULL\n");
+        return;
+    }
+    if(json->type == JSON_OBJECT){
+        if(key == NULL){
+            fprintf(stderr, "Cannot put NULL key into object\n");
+            return;
+        }
+        shput(json->object, key, child);
+    }else if(json->type == JSON_ARRAY){
+        if(key != NULL){
+            fprintf(stderr, "Warn: Trying to add key to array\n");
+        }
+        arrput(json->array, child);
+    }else{
+        fprintf(stderr, "Cannot add child to %s\n", token_type_to_string(json->type));
+    }
+}
+
+bool json_remove_child(JsonValue* json, JsonValue key){
+    if(key.type == JSON_STRING){
+        if(json->type != JSON_OBJECT){
+            fprintf(stderr, "Cannot remove string key from non object json!\n");
+            return 1;
+        }
+        return shdel(json->object, key.string);
+    }else if(key.type == JSON_NUMBER){
+        if(json->type != JSON_ARRAY){
+            fprintf(stderr, "Cannot remove number key from non array json!\n");
+            return 1;
+        }
+        arrdel(json->array, (size_t)key.number);
+        return 0;
+    }
+    fprintf(stderr, "Cannot remove key from non array or object json!\n");
+    return 1;
+}
+
+
+bool json_remove_key(JsonValue* json, const char* key){
+    if(json->type != JSON_OBJECT){
+        fprintf(stderr, "Cannot remove string key from non object json!\n");
+        return 1;
+    }
+    return shdel(json->object, key);
+}
+
+bool json_remove_at(JsonValue* json, size_t index){
+    if(json->type != JSON_ARRAY){
+        fprintf(stderr, "Cannot remove number key from non array json!\n");
+        return 1;
+    }
+    arrdel(json->array, index);
+    return 0;
+}
+
+
+JsonValue* json_new_string(Arena* arena, const char* str){
+    char* copy = arena_strndup(arena, str, strlen(str));
+    if(copy == NULL){
+        fprintf(stderr, "Could not duplicate string\n");
+        return NULL;
+    }
+    JsonValue* json_string = arena_alloc(arena, sizeof(JsonValue));
+    json_string->type = JSON_STRING;
+    json_string->string = copy;
+    return json_string;
+}
+
+JsonValue* json_new_number(Arena* arena, double num){
+    JsonValue* json_num = arena_alloc(arena, sizeof(JsonValue));
+    json_num->type = JSON_NUMBER;
+    json_num->number = num;
+    return json_num;
+}
+
+JsonValue* json_new_bool(Arena* arena, bool value){
+    JsonValue* json_bool = arena_alloc(arena, sizeof(JsonValue));
+    json_bool->type = JSON_BOOL;
+    json_bool->boolean = value;
+    return json_bool;
+}
+
+JsonValue* json_new_null(Arena* arena){
+    JsonValue* json_null = arena_alloc(arena, sizeof(JsonValue));
+    json_null->type = JSON_NULL;
+    return json_null;
+}
+
+#define STR_ARR(...) (const char*[]){__VA_ARGS__}, \
+                     sizeof((const char*[]){__VA_ARGS__}) / sizeof(const char*)
+
+#define NUM_ARR(...) (double[]){__VA_ARGS__}, \
+                     sizeof((double[]){__VA_ARGS__}) / sizeof(double)
+
+
+
+
+JsonValue* json_new_sarray(Arena* arena, const char** items, size_t length){
+    JsonValue* json_array = arena_alloc(arena, sizeof(JsonValue));
+    json_array->type = JSON_ARRAY;
+    json_array->array = NULL;
+    for(size_t i = 0; i < length; i++){
+        const char* item = items[i];
+        JsonValue* json_string = json_new_string(arena, item);
+        json_add_child(json_array, NULL, json_string);
+    }
+    return json_array;
+}
+
+JsonValue* json_new_narray(Arena* arena, const double* items, size_t length){
+    JsonValue* json_array = arena_alloc(arena, sizeof(JsonValue));
+    json_array->type = JSON_ARRAY;
+    json_array->array = NULL;
+    for(size_t i = 0; i < length; i++){
+        double item = items[i];
+        JsonValue* json_number = json_new_number(arena, item);
+        json_add_child(json_array, NULL, json_number);
+    }
+    return json_array;
 }
