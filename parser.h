@@ -607,6 +607,12 @@ void jsonStringLoad(char* json_string, Arena* arena, JsonValue* output){
 
 void json_init_object(JsonValue* json){
     json->type = JSON_OBJECT;
+    json->object = NULL;
+}
+
+void json_init_array(JsonValue* json){
+    json->type = JSON_ARRAY;
+    json->array = NULL;
 }
 
 void json_add_child(JsonValue* json, char* key, JsonValue* child){
@@ -675,6 +681,27 @@ JsonValue* json_new_string(Arena* arena, const char* str){
         return NULL;
     }
     JsonValue* json_string = arena_alloc(arena, sizeof(JsonValue));
+    json_string->type = JSON_STRING;
+    json_string->string = copy;
+    return json_string;
+}
+
+JsonValue* json_new_nstring(Arena* arena, const char* str, size_t n) {
+    char* copy = arena_alloc(arena, n + 1);
+    if (copy == NULL) {
+        fprintf(stderr, "Could not allocate memory for string\n");
+        return NULL;
+    }
+
+    memcpy(copy, str, n);
+    copy[n] = '\0';
+
+    JsonValue* json_string = arena_alloc(arena, sizeof(JsonValue));
+    if (json_string == NULL) {
+        fprintf(stderr, "Could not allocate memory for JsonValue\n");
+        return NULL;
+    }
+
     json_string->type = JSON_STRING;
     json_string->string = copy;
     return json_string;
