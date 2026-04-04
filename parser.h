@@ -1,3 +1,6 @@
+#ifndef _H_CJSON
+#define _H_CJSON
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -6,13 +9,14 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 
-#define STB_DS_IMPLEMENTATION
-// #define STBDS_STRING_KEY
-#include "stb_ds.h"
 
-#define ARENA_IMPLEMENTATION
-#include "arena.h"
+#ifndef CJSON_NO_STB_DS
+    #define STB_DS_IMPLEMENTATION
+    // #define STBDS_STRING_KEY
+    #include "stb_ds.h"
+#endif
 
 typedef enum {
     JSON_NULL, JSON_BOOL, JSON_NUMBER, JSON_STRING,
@@ -22,7 +26,7 @@ typedef enum {
 typedef uint8_t JsonType;
 
 
-static const bool is_whitespace[256] = {
+static const bool cjson_is_whitespace[256] = {
   [' '] = 1, ['\t'] = 1, ['\n'] = 1, ['\r'] = 1
 };
 
@@ -63,7 +67,7 @@ typedef enum {
     TOKEN_EOF=0, TOKEN_ERROR, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE,
     TOKEN_LEFT_BRACKET, TOKEN_RIGHT_BRACKET,
     TOKEN_COMMA, TOKEN_COLON,
-    TOKEN_STRING, TOKEN_NUMBER,
+    TOKEN_CJSON_STRING, TOKEN_NUMBER,
     TOKEN_TRUE, TOKEN_FALSE, TOKEN_NULL, TOKEN_NOT_INIT
 } JsonTokenType;
 
@@ -75,7 +79,7 @@ const char* token_type_to_string(JsonTokenType type) {
         case TOKEN_RIGHT_BRACKET: return "TOKEN_RIGHT_BRACKET";
         case TOKEN_COMMA: return "TOKEN_COMMA";
         case TOKEN_COLON: return "TOKEN_COLON";
-        case TOKEN_STRING: return "TOKEN_STRING";
+        case TOKEN_CJSON_STRING: return "TOKEN_STRING";
         case TOKEN_NUMBER: return "TOKEN_NUMBER";
         case TOKEN_TRUE: return "TOKEN_TRUE";
         case TOKEN_FALSE: return "TOKEN_FALSE";
@@ -92,7 +96,7 @@ typedef struct {
     JsonTokenType type;
     const char *start;
     size_t length;
-} Token;
+} CjsonToken;
 
 static int utf8_char_len(uint8_t c) {
     if (c < 0x80) return 1;              // ASCII
@@ -103,7 +107,7 @@ static int utf8_char_len(uint8_t c) {
 }
 
 
-void parse_string(char* json, size_t* index, Token* tok) {
+void cjson_parse_string(char* json, size_t* index, CjsonToken* tok) {
     size_t start = ++(*index);
 
     while (json[*index] != '"' && json[*index] != '\0') {
@@ -117,7 +121,7 @@ void parse_string(char* json, size_t* index, Token* tok) {
 
     tok->start = &json[start];
     tok->length = (*index) - start;
-    tok->type = TOKEN_STRING;
+    tok->type = TOKEN_CJSON_STRING;
 
     if (json[*index] == '"') {
         (*index)++;
@@ -127,7 +131,7 @@ void parse_string(char* json, size_t* index, Token* tok) {
 }
 
 
-void parse_number(char* json, size_t* index, Token* tok) {
+void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
     size_t start = *index;
 
     // Handle optional leading minus
@@ -199,7 +203,7 @@ static int is_json_delim(char c) {
     return c == '\0' || c == ',' || c == ']' || c == '}' || isspace((uint8_t)c);
 }
 
-void parse_keyword(char* json, size_t* index, Token* tok) {
+void parse_keyword(char* json, size_t* index, CjsonToken* tok) {
     char* ptr = &json[*index];
 
     if (strncmp(ptr, "true", 4) == 0 && is_json_delim(ptr[4])) {
@@ -222,20 +226,20 @@ void parse_keyword(char* json, size_t* index, Token* tok) {
 }
 
 
-Token next_token(char* json, size_t* index) {
-    while (is_whitespace[(uint8_t)json[*index]]) {
+CjsonToken cjson_next_token(char* json, size_t* index) {
+    while (cjson_is_whitespace[(uint8_t)json[*index]]) {
         (*index)++;
     }
 
     char c = json[*index];
 
-    Token tok;
+    CjsonToken tok;
     tok.type = TOKEN_NOT_INIT;
     tok.start = &json[*index];
     tok.length = 1;
 
     if (isdigit(c)) {
-        parse_number(json, index, &tok);
+        cjson_parse_number(json, index, &tok);
         return tok;
     }
 
@@ -247,7 +251,7 @@ Token next_token(char* json, size_t* index) {
         case ':': tok.type = TOKEN_COLON;         (*index)++; break;
         case ',': tok.type = TOKEN_COMMA;         (*index)++; break;
         case '"': {
-            parse_string(json, index, &tok);
+            cjson_parse_string(json, index, &tok);
             return tok;
         }
         case 't':
@@ -269,12 +273,12 @@ Token next_token(char* json, size_t* index) {
 }
 
 
-Token* tokenize(char* file_content){
-    Token* tokens = NULL;
+CjsonToken* tokenize(char* file_content){
+    CjsonToken* tokens = NULL;
     size_t index = 0;
 
     while (true) {
-        Token tok = next_token(file_content, &index);
+        CjsonToken tok = cjson_next_token(file_content, &index);
         if (tok.type == TOKEN_ERROR) {
             printf("Hit error at token %li. At file_content index %li\n",
                    (long int)arrlenu(tokens), (long int)index);
@@ -307,17 +311,8 @@ struct JsonValue {
     JsonType type;
 };
 
-
-char* arena_strndup(Arena* arena, const char* str, size_t length) {
-    size_t len = strnlen(str, length);
-    char* new_str = arena_alloc(arena, len + 1);
-    memcpy(new_str, str, len);
-    new_str[len] = '\0';
-    return new_str;
-}
-
 typedef struct {
-    Token* tokens;
+    CjsonToken* tokens;
     size_t index;
 } Parser;
 
@@ -328,25 +323,29 @@ void advance(Parser* parser) {
     }
 }
 
-void parse_object(Parser* parser, JsonValue* json_object, Arena* arena);
-void parse_array(Parser* parser, JsonValue* json_object, Arena* arena);
+void parse_object(Parser* parser, JsonValue* json_object);
+void parse_array(Parser* parser, JsonValue* json_object);
 
 
-JsonValue parse_value(Parser* parser, Arena* arena){
-    Token token = parser->tokens[parser->index];
+JsonValue parse_value(Parser* parser){
+    CjsonToken token = parser->tokens[parser->index];
     JsonValue value;
 
     switch(token.type){
-        case TOKEN_STRING:
+        case TOKEN_CJSON_STRING:
             value.type = JSON_STRING;
-            value.string = arena_strndup(arena, token.start, token.length);
+            value.string = malloc((token.length+1)*sizeof(char));
+            memcpy(value.string, token.start, token.length);
+            value.string[token.length] = '\0';
             advance(parser);
             break;
         case TOKEN_NUMBER:
             value.type = JSON_NUMBER;
-
-            char* number_string = arena_strndup(arena, token.start, token.length);
+            char* number_string = malloc((token.length+1)*sizeof(char));
+            memcpy(number_string, token.start, token.length);
+            number_string[token.length] = '\0';
             value.number = atof(number_string);
+            free(number_string);
             advance(parser);
             break;
         case TOKEN_TRUE:
@@ -364,10 +363,10 @@ JsonValue parse_value(Parser* parser, Arena* arena){
             advance(parser);
             break;
         case TOKEN_LEFT_BRACE:
-            parse_object(parser, &value, arena);
+            parse_object(parser, &value);
             break;
         case TOKEN_LEFT_BRACKET:
-            parse_array(parser, &value, arena);
+            parse_array(parser, &value);
             break;
         default:
 
@@ -377,31 +376,33 @@ JsonValue parse_value(Parser* parser, Arena* arena){
     return value;
 }
 
-Token get_current_token(Parser* parser) {
+CjsonToken get_current_token(Parser* parser) {
     size_t len = arrlenu(parser->tokens);
     if (parser->index >= len) {
         printf("Parser index %lu out of bounds (len=%lu)\n", (long int)parser->index, (long int)len);
-        Token t = { .type = TOKEN_EOF, .start = NULL, .length = 0 };
+        CjsonToken t = { .type = TOKEN_EOF, .start = NULL, .length = 0 };
         return t;
     }
     return parser->tokens[parser->index];
 }
 
-void parse_object(Parser* parser, JsonValue* json_object, Arena* arena) {
+void parse_object(Parser* parser, JsonValue* json_object) {
     json_object->type = JSON_OBJECT;
     json_object->object = NULL;
 
     advance(parser); // skip "{"
 
     while (get_current_token(parser).type != TOKEN_RIGHT_BRACE) {
-        Token key_token = get_current_token(parser);
+        CjsonToken key_token = get_current_token(parser);
 
-        if (key_token.type != TOKEN_STRING) {
+        if (key_token.type != TOKEN_CJSON_STRING) {
             printf("Expected string key but %s found. at %lu\n", token_type_to_string(key_token.type), (long int)parser->index);
             exit(1);
         }
 
-        char* key = arena_strndup(arena, key_token.start, key_token.length);
+        char* key = malloc((key_token.length+1)*sizeof(char));
+        memcpy(key, key_token.start, key_token.length);
+        key[key_token.length] = '\0';
         advance(parser);
 
         if (get_current_token(parser).type != TOKEN_COLON) {
@@ -411,8 +412,8 @@ void parse_object(Parser* parser, JsonValue* json_object, Arena* arena) {
 
         advance(parser);
 
-        JsonValue value = parse_value(parser, arena);
-        JsonValue* heap_value = arena_alloc(arena, sizeof(JsonValue));
+        JsonValue value = parse_value(parser);
+        JsonValue* heap_value = malloc(sizeof(JsonValue));
         *heap_value = value;
 
         shput(json_object->object, key, heap_value);
@@ -428,15 +429,15 @@ void parse_object(Parser* parser, JsonValue* json_object, Arena* arena) {
     advance(parser); // Skip '}'
 }
 
-void parse_array(Parser* parser, JsonValue* json_object, Arena* arena) {
+void parse_array(Parser* parser, JsonValue* json_object) {
     json_object->type = JSON_ARRAY;
     json_object->array = NULL;
 
     advance(parser); // Skip '['
 
     while (get_current_token(parser).type != TOKEN_RIGHT_BRACKET) {
-        JsonValue value = parse_value(parser, arena);
-        JsonValue* heap_value = arena_alloc(arena, sizeof(JsonValue));
+        JsonValue value = parse_value(parser);
+        JsonValue* heap_value = malloc(sizeof(JsonValue));
         *heap_value = value;
 
         arrput(json_object->array, heap_value);
@@ -452,13 +453,13 @@ void parse_array(Parser* parser, JsonValue* json_object, Arena* arena) {
     advance(parser); // Skip ']'
 }
 
-void parse_json(Token* tokens, Arena* arena, JsonValue* output) {
+void parse_json(CjsonToken* tokens, JsonValue* output) {
     Parser parser = { tokens, 0 };
 
     if (tokens[0].type == TOKEN_LEFT_BRACE) {
-        parse_object(&parser, output, arena);
+        parse_object(&parser, output);
     } else if (tokens[0].type == TOKEN_LEFT_BRACKET) {
-        parse_array(&parser, output, arena);
+        parse_array(&parser, output);
     } else {
         printf("error: root must be object or array\n");
         exit(1);
@@ -483,6 +484,76 @@ static void get_indentation(int depth, int spaces, char *buffer, size_t bufsize)
     memset(buffer, ' ', totalSpaces);
     buffer[totalSpaces] = '\0';
 }
+
+
+static void sb_append(char **buf, const char *fmt, ...) {
+    char temp[1024];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(temp, sizeof(temp), fmt, args);
+    va_end(args);
+
+    if (n < 0) return;
+
+    if ((size_t)n >= sizeof(temp)) {
+        char *heapbuf = malloc(n + 1);
+        va_start(args, fmt);
+        vsnprintf(heapbuf, n + 1, fmt, args);
+        va_end(args);
+        for (int i = 0; i < n; i++)
+            arrpush(*buf, heapbuf[i]);
+        free(heapbuf);
+    } else {
+        for (int i = 0; i < n; i++)
+            arrpush(*buf, temp[i]);
+    }
+}
+
+
+void json_dump(JsonValue *json, char **out) {
+    switch (json->type) {
+        case JSON_OBJECT: {
+            sb_append(out, "{");
+            JsonPair *pairs = json->object;
+            size_t first = 1;
+            for (size_t slot = 0; slot < hmlenu(pairs); slot++) {
+                if (pairs[slot].key == NULL) continue;
+                if (!first) sb_append(out, ",");
+                first = 0;
+                sb_append(out, "\"%s\":", pairs[slot].key);
+                json_dump(pairs[slot].value, out);
+            }
+            sb_append(out, "}");
+            break;
+        }
+
+        case JSON_ARRAY: {
+            sb_append(out, "[");
+            JsonValue **values = json->array;
+            size_t count = arrlen(values);
+            for (size_t i = 0; i < count; i++) {
+                if (i > 0) sb_append(out, ",");
+                json_dump(values[i], out);
+            }
+            sb_append(out, "]");
+            break;
+        }
+
+        case JSON_STRING:
+            sb_append(out, "\"%s\"", json->string);
+            break;
+        case JSON_NUMBER:
+            sb_append(out, "%g", json->number);
+            break;
+        case JSON_BOOL:
+            sb_append(out, "%s", json->boolean ? "true" : "false");
+            break;
+        case JSON_NULL:
+            sb_append(out, "null");
+            break;
+    }
+}
+
 
 void json_print(JsonValue* json, size_t spaces, size_t depth) {
     char indent[512]; // max indentation size — adjust as needed
@@ -569,39 +640,75 @@ void json_free(JsonValue *value) {
             }
             break;
 
-        case JSON_OBJECT: {
-            for(size_t i = 0; i < shlenu(value->object); i++){
-                json_free(value->object[i].value);
+        case JSON_OBJECT:
+            if(value->object){
+                for (size_t i = 0; i < shlenu(value->object); i++) {
+                    free(value->object[i].key);
+                    json_free(value->object[i].value);
+                }
+                shfree(value->object);
             }
-            shfree(value->object);
             break;
-        }
 
         case JSON_STRING:
+            free(value->string);
+            break;
+
         case JSON_NUMBER:
         case JSON_BOOL:
-            // Strings are arena allocated (number and bool arent on heap)
-            break;
-
-        default:
+        case JSON_NULL:
             break;
     }
+
+    free(value);
 }
 
-void jsonFileLoad(const char* file_name, Arena* arena, JsonValue* output){
+char *json_escape(const char *input) {
+    if (!input) return NULL;
+
+    size_t len = strlen(input);
+    char *escaped = malloc(len * 6 + 1);
+    if (!escaped) return NULL;
+
+    char *p = escaped;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = input[i];
+        switch (c) {
+            case '\"': *p++ = '\\'; *p++ = '\"'; break;
+            case '\\': *p++ = '\\'; *p++ = '\\'; break;
+            case '\b': *p++ = '\\'; *p++ = 'b';  break;
+            case '\f': *p++ = '\\'; *p++ = 'f';  break;
+            case '\n': *p++ = '\\'; *p++ = 'n';  break;
+            case '\r': *p++ = '\\'; *p++ = 'r';  break;
+            case '\t': *p++ = '\\'; *p++ = 't';  break;
+            default:
+                if (c < 0x20) {
+                    sprintf(p, "\\u%04x", c);
+                    p += 6;
+                } else {
+                    *p++ = c;
+                }
+                break;
+        }
+    }
+    *p = '\0';
+    return escaped;
+}
+
+void jsonFileLoad(const char* file_name, JsonValue* output){
     char* file_content = file_read(file_name);
     if(!file_content){
         return;
     }
-    Token* tokens = tokenize(file_content);
-    parse_json(tokens, arena, output);
+    CjsonToken* tokens = tokenize(file_content);
+    parse_json(tokens, output);
     arrfree(file_content);
     arrfree(tokens);
 }
 
-void jsonStringLoad(char* json_string, Arena* arena, JsonValue* output){
-    Token* tokens = tokenize(json_string);
-    parse_json(tokens, arena, output);
+void jsonStringLoad(char* json_string, JsonValue* output){
+    CjsonToken* tokens = tokenize(json_string);
+    parse_json(tokens, output);
     arrfree(tokens);
 }
 
@@ -615,24 +722,26 @@ void json_init_array(JsonValue* json){
     json->array = NULL;
 }
 
-void json_add_child(JsonValue* json, char* key, JsonValue* child){
-    if(!child){
-        fprintf(stderr, "Tryng to add child that NULL\n");
+void json_add_child(JsonValue* json, const char* key, JsonValue* child) {
+    if (!child) {
+        fprintf(stderr, "Trying to add child that is NULL\n");
         return;
     }
-    if(json->type == JSON_OBJECT){
-        if(key == NULL){
+    if (json->type == JSON_OBJECT) {
+        if (key == NULL) {
             fprintf(stderr, "Cannot put NULL key into object\n");
             return;
         }
-        shput(json->object, key, child);
-    }else if(json->type == JSON_ARRAY){
-        if(key != NULL){
+        char* key_copy = malloc((strlen(key) + 1) * sizeof(char));
+        memcpy(key_copy, key, strlen(key) + 1);
+        shput(json->object, key_copy, child);
+    } else if (json->type == JSON_ARRAY) {
+        if (key != NULL) {
             fprintf(stderr, "Warn: Trying to add key to array\n");
         }
         arrput(json->array, child);
-    }else{
-        fprintf(stderr, "Cannot add child to %s\n", token_type_to_string(json->type));
+    } else {
+        fprintf(stderr, "Cannot add child to non-object/array\n");
     }
 }
 
@@ -674,20 +783,26 @@ bool json_remove_at(JsonValue* json, size_t index){
 }
 
 
-JsonValue* json_new_string(Arena* arena, const char* str){
-    char* copy = arena_strndup(arena, str, strlen(str));
+JsonValue* json_new_string(const char* str){
+    size_t len = strlen(str);
+    char* copy = malloc((len+1)*sizeof(char));
+
     if(copy == NULL){
         fprintf(stderr, "Could not duplicate string\n");
         return NULL;
     }
-    JsonValue* json_string = arena_alloc(arena, sizeof(JsonValue));
+    memcpy(copy, str, len);
+    copy[len] = '\0';
+
+    JsonValue* json_string = malloc(sizeof(JsonValue));
     json_string->type = JSON_STRING;
     json_string->string = copy;
     return json_string;
 }
 
-JsonValue* json_new_nstring(Arena* arena, const char* str, size_t n) {
-    char* copy = arena_alloc(arena, n + 1);
+JsonValue* json_new_nstring(const char* str, size_t n) {
+    char* copy = malloc((n+1)*sizeof(char));
+
     if (copy == NULL) {
         fprintf(stderr, "Could not allocate memory for string\n");
         return NULL;
@@ -696,7 +811,7 @@ JsonValue* json_new_nstring(Arena* arena, const char* str, size_t n) {
     memcpy(copy, str, n);
     copy[n] = '\0';
 
-    JsonValue* json_string = arena_alloc(arena, sizeof(JsonValue));
+    JsonValue* json_string = malloc(sizeof(JsonValue));
     if (json_string == NULL) {
         fprintf(stderr, "Could not allocate memory for JsonValue\n");
         return NULL;
@@ -707,22 +822,24 @@ JsonValue* json_new_nstring(Arena* arena, const char* str, size_t n) {
     return json_string;
 }
 
-JsonValue* json_new_number(Arena* arena, double num){
-    JsonValue* json_num = arena_alloc(arena, sizeof(JsonValue));
+// TODO: Remove arena
+
+JsonValue* json_new_number(double num){
+    JsonValue* json_num = malloc(sizeof(JsonValue));
     json_num->type = JSON_NUMBER;
     json_num->number = num;
     return json_num;
 }
 
-JsonValue* json_new_bool(Arena* arena, bool value){
-    JsonValue* json_bool = arena_alloc(arena, sizeof(JsonValue));
+JsonValue* json_new_bool(bool value){
+    JsonValue* json_bool = malloc(sizeof(JsonValue));
     json_bool->type = JSON_BOOL;
     json_bool->boolean = value;
     return json_bool;
 }
 
-JsonValue* json_new_null(Arena* arena){
-    JsonValue* json_null = arena_alloc(arena, sizeof(JsonValue));
+JsonValue* json_new_null(){
+    JsonValue* json_null = malloc(sizeof(JsonValue));
     json_null->type = JSON_NULL;
     return json_null;
 }
@@ -736,26 +853,42 @@ JsonValue* json_new_null(Arena* arena){
 
 
 
-JsonValue* json_new_sarray(Arena* arena, const char** items, size_t length){
-    JsonValue* json_array = arena_alloc(arena, sizeof(JsonValue));
+JsonValue* json_new_sarray(const char** items, size_t length){
+    JsonValue* json_array = malloc(sizeof(JsonValue));
     json_array->type = JSON_ARRAY;
     json_array->array = NULL;
     for(size_t i = 0; i < length; i++){
         const char* item = items[i];
-        JsonValue* json_string = json_new_string(arena, item);
+        JsonValue* json_string = json_new_string(item);
         json_add_child(json_array, NULL, json_string);
     }
     return json_array;
 }
 
-JsonValue* json_new_narray(Arena* arena, const double* items, size_t length){
-    JsonValue* json_array = arena_alloc(arena, sizeof(JsonValue));
+JsonValue* json_new_narray(const double* items, size_t length){
+    JsonValue* json_array = malloc(sizeof(JsonValue));
     json_array->type = JSON_ARRAY;
     json_array->array = NULL;
     for(size_t i = 0; i < length; i++){
         double item = items[i];
-        JsonValue* json_number = json_new_number(arena, item);
+        JsonValue* json_number = json_new_number(item);
         json_add_child(json_array, NULL, json_number);
     }
     return json_array;
 }
+
+JsonValue* json_new_object(){
+    JsonValue* json_object = malloc(sizeof(JsonValue));
+    json_object->type = JSON_OBJECT;
+    json_object->object = NULL;
+    return json_object;
+}
+
+JsonValue* json_new_array(){
+    JsonValue* json_array = malloc(sizeof(JsonValue));
+    json_array->type = JSON_ARRAY;
+    json_array->array = NULL;
+    return json_array;
+}
+
+#endif
