@@ -238,7 +238,7 @@ CjsonToken cjson_next_token(char* json, size_t* index) {
     tok.start = &json[*index];
     tok.length = 1;
 
-    if (isdigit(c)) {
+    if (isdigit(c) || c == '-') {
         cjson_parse_number(json, index, &tok);
         return tok;
     }
@@ -282,6 +282,7 @@ CjsonToken* tokenize(char* file_content){
         if (tok.type == TOKEN_ERROR) {
             printf("Hit error at token %li. At file_content index %li\n",
                    (long int)arrlenu(tokens), (long int)index);
+            printf("%s", file_content);
             break;
         }
         if (tok.type == TOKEN_EOF) {
@@ -329,6 +330,7 @@ void parse_array(Parser* parser, JsonValue* json_object);
 
 JsonValue parse_value(Parser* parser){
     CjsonToken token = parser->tokens[parser->index];
+
     JsonValue value;
 
     switch(token.type){
@@ -369,7 +371,6 @@ JsonValue parse_value(Parser* parser){
             parse_array(parser, &value);
             break;
         default:
-
             printf("Unexpected token: %.*s type=%u\n", (int)token.length, token.start, token.type);
             exit(1);
     }
