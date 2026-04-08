@@ -696,6 +696,57 @@ char *json_escape(const char *input) {
     return escaped;
 }
 
+static char hex_to_char(const char *hex) {
+    int value = 0;
+    for (int i = 0; i < 4; i++) {
+        value <<= 4;
+        if (hex[i] >= '0' && hex[i] <= '9') value += hex[i] - '0';
+        else if (hex[i] >= 'a' && hex[i] <= 'f') value += hex[i] - 'a' + 10;
+        else if (hex[i] >= 'A' && hex[i] <= 'F') value += hex[i] - 'A' + 10;
+        else return '?'; // invalid hex
+    }
+    return (char)value;
+}
+
+char *json_unescape(const char *input) {
+    if (!input) return NULL;
+
+    size_t len = strlen(input);
+    char *unescaped = malloc(len + 1);
+    if (!unescaped) return NULL;
+
+    char *p = unescaped;
+    for (size_t i = 0; i < len; i++) {
+        if (input[i] == '\\') {
+            i++;
+            if (i >= len) break;
+            switch (input[i]) {
+                case '\"': *p++ = '\"'; break;
+                case '\\': *p++ = '\\'; break;
+                case '/':  *p++ = '/';  break;
+                case 'b':  *p++ = '\b'; break;
+                case 'f':  *p++ = '\f'; break;
+                case 'n':  *p++ = '\n'; break;
+                case 'r':  *p++ = '\r'; break;
+                case 't':  *p++ = '\t'; break;
+                case 'u':
+                    if (i + 4 < len) {
+                        *p++ = hex_to_char(&input[i + 1]);
+                        i += 4;
+                    }
+                    break;
+                default:
+                    *p++ = input[i];
+                    break;
+            }
+        } else {
+            *p++ = input[i];
+        }
+    }
+    *p = '\0';
+    return unescaped;
+}
+
 void jsonFileLoad(const char* file_name, JsonValue* output){
     char* file_content = file_read(file_name);
     if(!file_content){
