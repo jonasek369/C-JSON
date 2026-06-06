@@ -5,13 +5,25 @@ int main(void)
     // Example of parsing file
     JsonValue* json = malloc(sizeof(JsonValue));
     jsonFileLoad("./tests/basic.json", json);
+    JsonValue* float_num = shget(json->object, "float");
+    if(float_num->flags & HAS_FRACTION){
+        printf("This is a float!\n");
+    }else{
+        printf("This wont be executed!\n");
+    }
+    JsonValue* int_num = shget(json->object, "age");
+    if(int_num->flags & HAS_FRACTION){
+        printf("This is a float!\n");
+    }else{
+        printf("This now will be executed!\n");
+    }
     json_print(json, 4, 0);
 
     // Making json in code
     JsonValue* code_json = malloc(sizeof(JsonValue)); 
     json_init_object(code_json); // or initialise object as JsonValue code_json = {.type=JSON_OBJECT}
     json_add_child(code_json, "first_key", json_new_string("hello"));
-    json_add_child(code_json, "second_key", json_new_number(32.1253));
+    json_add_child(code_json, "second_key", json_new_float(32.1253));
     json_add_child(code_json, "third_key", json_new_sarray(STR_ARR("a", "b", "c", "d")));
 
     JsonValue* nested = malloc(sizeof(JsonValue)); 

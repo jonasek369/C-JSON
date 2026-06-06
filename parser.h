@@ -23,6 +23,10 @@ typedef enum {
     JSON_ARRAY, JSON_OBJECT
 } JsonTypeConstants;
 
+
+#define HAS_FRACTION 0b00000001
+#define FULL_MASK    0b11111111
+
 typedef uint8_t JsonType;
 
 
@@ -96,6 +100,7 @@ typedef struct {
     JsonTokenType type;
     const char *start;
     size_t length;
+    uint8_t flags;
 } CjsonToken;
 
 static int utf8_char_len(uint8_t c) {
@@ -144,7 +149,7 @@ void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
         }
         (*index)++;
     }
-
+    bool has_fraction = false;
     bool found_decimal = false;
 
     // Parse integer and fractional parts
@@ -154,6 +159,7 @@ void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
         if (isdigit(c)) {
             (*index)++;
         } else if (c == '.' && !found_decimal) {
+            has_fraction = true;
             // Check digit after decimal point
             if (!isdigit(json[*index + 1])) {
                 tok->type = TOKEN_ERROR;
@@ -196,6 +202,11 @@ void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
         tok->type = TOKEN_NUMBER;
         tok->length = (*index) - start;
         tok->start = &json[start];
+        if(has_fraction){
+            tok->flags |= HAS_FRACTION;
+        }else{
+            tok->flags &= ~HAS_FRACTION;
+        }
     }
 }
 
@@ -237,6 +248,7 @@ CjsonToken cjson_next_token(char* json, size_t* index) {
     tok.type = TOKEN_NOT_INIT;
     tok.start = &json[*index];
     tok.length = 1;
+    tok.flags = 0;
 
     if (isdigit(c) || c == '-') {
         cjson_parse_number(json, index, &tok);
@@ -304,12 +316,14 @@ typedef struct {
 struct JsonValue {
     union {
         double number;
+        int64_t integer;
         char *string;
         bool boolean;
         JsonValue** array;  // list of JsonValue
         JsonPair* object;   // sh of JsonPair
     };
     JsonType type;
+    uint8_t flags;
 };
 
 typedef struct {
@@ -345,8 +359,17 @@ JsonValue parse_value(Parser* parser){
             value.type = JSON_NUMBER;
             char* number_string = malloc((token.length+1)*sizeof(char));
             memcpy(number_string, token.start, token.length);
+            // TODO: 
             number_string[token.length] = '\0';
-            value.number = atof(number_string);
+
+            if(token.flags & HAS_FRACTION){
+                value.number = atof(number_string);
+                value.flags |= HAS_FRACTION;
+            }else{
+                value.integer = atoll(number_string);
+                value.flags &= ~HAS_FRACTION;
+            }
+            
             free(number_string);
             advance(parser);
             break;
@@ -544,7 +567,11 @@ void json_dump(JsonValue *json, char **out) {
             sb_append(out, "\"%s\"", json->string);
             break;
         case JSON_NUMBER:
-            sb_append(out, "%g", json->number);
+            if(json->flags & HAS_FRACTION){
+                sb_append(out, "%f", json->number);
+            }else{
+                sb_append(out, "%ld", json->integer);
+            }
             break;
         case JSON_BOOL:
             sb_append(out, "%s", json->boolean ? "true" : "false");
@@ -611,7 +638,11 @@ void json_print(JsonValue* json, size_t spaces, size_t depth) {
             break;
         }
         case JSON_NUMBER: {
-            printf("%g", json->number);
+            if(json->flags & HAS_FRACTION){
+                printf("%f", json->number);
+            }else{
+                printf("%ld", json->integer);
+            }
             break;
         }
         case JSON_BOOL: {
@@ -847,6 +878,7 @@ JsonValue* json_new_string(const char* str){
     copy[len] = '\0';
 
     JsonValue* json_string = malloc(sizeof(JsonValue));
+    json_string->flags = 0;
     json_string->type = JSON_STRING;
     json_string->string = copy;
     return json_string;
@@ -868,6 +900,7 @@ JsonValue* json_new_nstring(const char* str, size_t n) {
         fprintf(stderr, "Could not allocate memory for JsonValue\n");
         return NULL;
     }
+    json_string->flags = 0;
 
     json_string->type = JSON_STRING;
     json_string->string = copy;
@@ -876,15 +909,28 @@ JsonValue* json_new_nstring(const char* str, size_t n) {
 
 // TODO: Remove arena
 
-JsonValue* json_new_number(double num){
+JsonValue* json_new_float(double num){
     JsonValue* json_num = malloc(sizeof(JsonValue));
+    json_num->flags = 0;
     json_num->type = JSON_NUMBER;
     json_num->number = num;
+    json_num->flags |= HAS_FRACTION;
+    return json_num;
+}
+
+
+JsonValue* json_new_integer(int64_t num){
+    JsonValue* json_num = malloc(sizeof(JsonValue));
+    json_num->flags = 0;
+    json_num->type = JSON_NUMBER;
+    json_num->integer = num;
+    json_num->flags &= ~HAS_FRACTION; 
     return json_num;
 }
 
 JsonValue* json_new_bool(bool value){
     JsonValue* json_bool = malloc(sizeof(JsonValue));
+    json_bool->flags = 0;
     json_bool->type = JSON_BOOL;
     json_bool->boolean = value;
     return json_bool;
@@ -892,6 +938,7 @@ JsonValue* json_new_bool(bool value){
 
 JsonValue* json_new_null(){
     JsonValue* json_null = malloc(sizeof(JsonValue));
+    json_null->flags = 0;
     json_null->type = JSON_NULL;
     return json_null;
 }
@@ -907,6 +954,7 @@ JsonValue* json_new_null(){
 
 JsonValue* json_new_sarray(const char** items, size_t length){
     JsonValue* json_array = malloc(sizeof(JsonValue));
+    json_array->flags = 0;
     json_array->type = JSON_ARRAY;
     json_array->array = NULL;
     for(size_t i = 0; i < length; i++){
@@ -917,13 +965,27 @@ JsonValue* json_new_sarray(const char** items, size_t length){
     return json_array;
 }
 
-JsonValue* json_new_narray(const double* items, size_t length){
+JsonValue* json_new_int_array(const int64_t* items, size_t length){
     JsonValue* json_array = malloc(sizeof(JsonValue));
+    json_array->flags = 0;
     json_array->type = JSON_ARRAY;
     json_array->array = NULL;
     for(size_t i = 0; i < length; i++){
         double item = items[i];
-        JsonValue* json_number = json_new_number(item);
+        JsonValue* json_number = json_new_integer(item);
+        json_add_child(json_array, NULL, json_number);
+    }
+    return json_array;
+}
+
+JsonValue* json_new_float_array(const double* items, size_t length){
+    JsonValue* json_array = malloc(sizeof(JsonValue));
+    json_array->flags = 0;
+    json_array->type = JSON_ARRAY;
+    json_array->array = NULL;
+    for(size_t i = 0; i < length; i++){
+        double item = items[i];
+        JsonValue* json_number = json_new_float(item);
         json_add_child(json_array, NULL, json_number);
     }
     return json_array;
@@ -931,6 +993,7 @@ JsonValue* json_new_narray(const double* items, size_t length){
 
 JsonValue* json_new_object(){
     JsonValue* json_object = malloc(sizeof(JsonValue));
+    json_object->flags = 0;
     json_object->type = JSON_OBJECT;
     json_object->object = NULL;
     return json_object;
@@ -938,6 +1001,7 @@ JsonValue* json_new_object(){
 
 JsonValue* json_new_array(){
     JsonValue* json_array = malloc(sizeof(JsonValue));
+    json_array->flags = 0;
     json_array->type = JSON_ARRAY;
     json_array->array = NULL;
     return json_array;
