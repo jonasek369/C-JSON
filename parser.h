@@ -135,80 +135,88 @@ void cjson_parse_string(char* json, size_t* index, CjsonToken* tok) {
     }
 }
 
-
 void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
     size_t start = *index;
 
-    // Handle optional leading minus
+    bool has_fraction = false;
+    bool has_exponent = false;
+
+    // Optional leading minus
     if (json[*index] == '-') {
-        if (!isdigit(json[*index + 1])) {
+        (*index)++;
+    }
+
+    // Integer part
+    if (json[*index] == '0') {
+        (*index)++;
+
+        // JSON does not allow leading zeros
+        if (isdigit((unsigned char)json[*index])) {
             tok->type = TOKEN_ERROR;
-            tok->length = 1;
-            (*index)++;
+            tok->length = (*index) - start;
             return;
         }
-        (*index)++;
     }
-    bool has_fraction = false;
-    bool found_decimal = false;
-
-    // Parse integer and fractional parts
-    while (true) {
-        char c = json[*index];
-
-        if (isdigit(c)) {
+    else if (isdigit((unsigned char)json[*index])) {
+        while (isdigit((unsigned char)json[*index])) {
             (*index)++;
-        } else if (c == '.' && !found_decimal) {
-            has_fraction = true;
-            // Check digit after decimal point
-            if (!isdigit(json[*index + 1])) {
-                tok->type = TOKEN_ERROR;
-                tok->length = (*index) - start;
-                return;
-            }
-            found_decimal = true;
-            (*index)++;
-        } else {
-            break;
         }
     }
+    else {
+        tok->type = TOKEN_ERROR;
+        tok->length = (*index) - start;
+        return;
+    }
 
-    // Parse exponent part
-    if (json[*index] == 'e' || json[*index] == 'E') {
+    // Fractional part
+    if (json[*index] == '.') {
+        has_fraction = true;
         (*index)++;
 
-        // Optional sign after 'e'
-        if (json[*index] == '+' || json[*index] == '-') {
-            (*index)++;
-        }
-
-        // Must have digits after exponent
-        if (!isdigit(json[*index])) {
+        // Must have at least one digit after '.'
+        if (!isdigit((unsigned char)json[*index])) {
             tok->type = TOKEN_ERROR;
             tok->length = (*index) - start;
             return;
         }
 
-        while (isdigit(json[*index])) {
+        while (isdigit((unsigned char)json[*index])) {
             (*index)++;
         }
     }
 
-    if ((*index) == start) {
-        // No digits parsed at all
-        tok->type = TOKEN_ERROR;
-        tok->length = 0;
-    } else {
-        tok->type = TOKEN_NUMBER;
-        tok->length = (*index) - start;
-        tok->start = &json[start];
-        if(has_fraction){
-            tok->flags |= HAS_FRACTION;
-        }else{
-            tok->flags &= ~HAS_FRACTION;
+    // Exponent part
+    if (json[*index] == 'e' || json[*index] == 'E') {
+        has_exponent = true;
+        (*index)++;
+
+        // Optional exponent sign
+        if (json[*index] == '+' || json[*index] == '-') {
+            (*index)++;
+        }
+
+        // Must have at least one exponent digit
+        if (!isdigit((unsigned char)json[*index])) {
+            tok->type = TOKEN_ERROR;
+            tok->length = (*index) - start;
+            return;
+        }
+
+        while (isdigit((unsigned char)json[*index])) {
+            (*index)++;
         }
     }
+
+    tok->type = TOKEN_NUMBER;
+    tok->start = &json[start];
+    tok->length = (*index) - start;
+
+    if (has_fraction)
+        tok->flags |= HAS_FRACTION;
+    else
+        tok->flags &= ~HAS_FRACTION;
 }
+
 
 static int is_json_delim(char c) {
     return c == '\0' || c == ',' || c == ']' || c == '}' || isspace((uint8_t)c);
@@ -949,9 +957,6 @@ JsonValue* json_new_null(){
 #define NUM_ARR(...) (double[]){__VA_ARGS__}, \
                      sizeof((double[]){__VA_ARGS__}) / sizeof(double)
 
-
-
-
 JsonValue* json_new_sarray(const char** items, size_t length){
     JsonValue* json_array = malloc(sizeof(JsonValue));
     json_array->flags = 0;
@@ -1006,5 +1011,28 @@ JsonValue* json_new_array(){
     json_array->array = NULL;
     return json_array;
 }
+
+double json_get_float(JsonValue* value){
+    if(value->type != JSON_NUMBER){
+        return 0.f;
+    }
+    if(!(value->flags & HAS_FRACTION)){
+        return (double)value->integer;
+    }else{
+        return value->number;
+    }
+}
+
+int64_t json_get_integer(JsonValue* value){
+    if(value->type != JSON_NUMBER){
+        return 0;
+    }
+    if(value->flags & HAS_FRACTION){
+        return (int64_t)value->number;
+    }else{
+        return value->integer;
+    }
+}
+
 
 #endif

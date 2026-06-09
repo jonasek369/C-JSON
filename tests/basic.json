@@ -9,5 +9,5 @@
   "sum": {"test": "working..."},
   "empty": "",
   "big_number": 1e10,
-  "nested_array": [[1, 2], [3, 4]]
+  "nested_array": [[1, 2], [3, 4, [4.2, 32, 22]], {"test": 32.23, "test2": 12}]
 }
