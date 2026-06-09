@@ -542,31 +542,57 @@ static void sb_append(char **buf, const char *fmt, ...) {
 }
 
 
-void json_dump(JsonValue *json, char **out) {
+static void json_indent(char **out, size_t depth, size_t spaces) {
+    for (size_t i = 0; i < depth * spaces; i++) {
+        sb_append(out, " ");
+    }
+}
+
+void json_dump(JsonValue *json, char **out, size_t spaces, size_t depth) {
     switch (json->type) {
+
         case JSON_OBJECT: {
-            sb_append(out, "{");
+            sb_append(out, "{\n");
+
             JsonPair *pairs = json->object;
             size_t first = 1;
+
             for (size_t slot = 0; slot < hmlenu(pairs); slot++) {
                 if (pairs[slot].key == NULL) continue;
-                if (!first) sb_append(out, ",");
+
+                if (!first) sb_append(out, ",\n");
                 first = 0;
-                sb_append(out, "\"%s\":", pairs[slot].key);
-                json_dump(pairs[slot].value, out);
+
+                json_indent(out, depth + 1, spaces);
+                sb_append(out, "\"%s\": ", pairs[slot].key);
+
+                json_dump(pairs[slot].value, out, spaces, depth + 1);
             }
+
+            sb_append(out, "\n");
+            json_indent(out, depth, spaces);
             sb_append(out, "}");
             break;
         }
 
         case JSON_ARRAY: {
-            sb_append(out, "[");
+            sb_append(out, "[\n");
+
             JsonValue **values = json->array;
             size_t count = arrlen(values);
+
             for (size_t i = 0; i < count; i++) {
-                if (i > 0) sb_append(out, ",");
-                json_dump(values[i], out);
+                json_indent(out, depth + 1, spaces);
+
+                json_dump(values[i], out, spaces, depth + 1);
+
+                if (i < count - 1)
+                    sb_append(out, ",\n");
+                else
+                    sb_append(out, "\n");
             }
+
+            json_indent(out, depth, spaces);
             sb_append(out, "]");
             break;
         }
@@ -574,22 +600,23 @@ void json_dump(JsonValue *json, char **out) {
         case JSON_STRING:
             sb_append(out, "\"%s\"", json->string);
             break;
+
         case JSON_NUMBER:
-            if(json->flags & HAS_FRACTION){
+            if (json->flags & HAS_FRACTION)
                 sb_append(out, "%f", json->number);
-            }else{
+            else
                 sb_append(out, "%ld", json->integer);
-            }
             break;
+
         case JSON_BOOL:
             sb_append(out, "%s", json->boolean ? "true" : "false");
             break;
+
         case JSON_NULL:
             sb_append(out, "null");
             break;
     }
 }
-
 
 void json_print(JsonValue* json, size_t spaces, size_t depth) {
     char indent[512]; // max indentation size — adjust as needed
