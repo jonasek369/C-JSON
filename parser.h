@@ -11,6 +11,8 @@
 #include <math.h>
 #include <stdarg.h>
 
+#define JSON_STATE_OK    0
+#define JSON_STATE_ERROR 1
 
 #ifndef CJSON_NO_STB_DS
     #define STB_DS_IMPLEMENTATION
@@ -140,6 +142,7 @@ void cjson_parse_number(char* json, size_t* index, CjsonToken* tok) {
 
     bool has_fraction = false;
     bool has_exponent = false;
+    (void) has_exponent; // Unused for now
 
     // Optional leading minus
     if (json[*index] == '-') {
@@ -293,7 +296,7 @@ CjsonToken cjson_next_token(char* json, size_t* index) {
 }
 
 
-CjsonToken* tokenize(char* file_content){
+CjsonToken* tokenize(char* file_content, uint8_t* state){
     CjsonToken* tokens = NULL;
     size_t index = 0;
 
@@ -302,8 +305,9 @@ CjsonToken* tokenize(char* file_content){
         if (tok.type == TOKEN_ERROR) {
             printf("Hit error at token %li. At file_content index %li\n",
                    (long int)arrlenu(tokens), (long int)index);
-            printf("%s", file_content);
-            break;
+            printf("%s\n", file_content);
+            *state = JSON_STATE_ERROR;
+            return tokens;
         }
         if (tok.type == TOKEN_EOF) {
             arrput(tokens, tok);
@@ -311,6 +315,7 @@ CjsonToken* tokenize(char* file_content){
         }
         arrput(tokens, tok);
     }
+    *state = JSON_STATE_OK;
     return tokens;
 }
 
@@ -354,6 +359,7 @@ JsonValue parse_value(Parser* parser){
     CjsonToken token = parser->tokens[parser->index];
 
     JsonValue value;
+    value.flags = 0;
 
     switch(token.type){
         case TOKEN_CJSON_STRING:
@@ -813,21 +819,34 @@ char *json_unescape(const char *input) {
     return unescaped;
 }
 
-void jsonFileLoad(const char* file_name, JsonValue* output){
+bool jsonFileLoad(const char* file_name, JsonValue* output){
     char* file_content = file_read(file_name);
     if(!file_content){
-        return;
+        return false;
     }
-    CjsonToken* tokens = tokenize(file_content);
+    uint8_t tokenization_state = 0;
+    CjsonToken* tokens = tokenize(file_content, &tokenization_state);
+    if(tokenization_state != JSON_STATE_OK){
+        arrfree(file_content);
+        arrfree(tokens);
+        return false;
+    }
     parse_json(tokens, output);
     arrfree(file_content);
     arrfree(tokens);
+    return true;
 }
 
-void jsonStringLoad(char* json_string, JsonValue* output){
-    CjsonToken* tokens = tokenize(json_string);
+bool jsonStringLoad(char* json_string, JsonValue* output){
+    uint8_t tokenization_state = 0;
+    CjsonToken* tokens = tokenize(json_string, &tokenization_state);
+    if(tokenization_state != JSON_STATE_OK){
+        arrfree(tokens);
+        return false;
+    }
     parse_json(tokens, output);
     arrfree(tokens);
+    return true;
 }
 
 void json_init_object(JsonValue* json){
